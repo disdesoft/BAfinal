@@ -3,3 +3,5 @@ pandas>=2.1
 numpy>=1.26
 plotly>=5.22
 pulp>=2.8
+
+openpyxl>=3.1
