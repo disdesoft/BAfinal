@@ -15,11 +15,25 @@ st.set_page_config(page_title="Proyecto de Aula - Business Analytics (Matrícula
 
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
+    """Robust loader: detects extension and avoids misreading XLSX as CSV."""
+    p = str(path).lower()
     try:
-        df = pd.read_excel(path)
-    except Exception:
-        df = pd.read_csv(path, sep=",")
-    return df
+        if p.endswith(".xlsx") or p.endswith(".xls"):
+            # Use openpyxl engine explicitly for reliability in hosted envs
+            return pd.read_excel(path, engine="openpyxl")
+        else:
+            # CSV: try utf-8, then latin-1 as fallback
+            try:
+                return pd.read_csv(path)
+            except UnicodeDecodeError:
+                return pd.read_csv(path, encoding="latin-1")
+    except Exception as e:
+        # As a last resort, try pandas auto with encoding fallback
+        try:
+            return pd.read_csv(path, encoding="latin-1")
+        except Exception:
+            st.error(f"No se pudo abrir el archivo {path}. Error: {e}")
+            return pd.DataFrame()
 
 def detect_time_columns(df: pd.DataFrame):
     time_like = []
