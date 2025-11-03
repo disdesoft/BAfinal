@@ -1,0 +1,5 @@
+streamlit==1.39.0
+pandas>=2.1
+numpy>=1.26
+plotly>=5.22
+pulp>=2.8
