@@ -1,10 +1,10 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-# --- OPTIMIZADOR (opcional) ---
 try:
     import pulp
     PULP_OK = True
@@ -13,27 +13,13 @@ except Exception:
 
 st.set_page_config(page_title="Proyecto de Aula - Business Analytics (Matrículas)", layout="wide")
 
-# =========================
-# Utilidades base de datos
-# =========================
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
-    """Carga robusta: detecta extensión y evita leer XLSX como CSV por error."""
-    p = str(path).lower()
     try:
-        if p.endswith(".xlsx") or p.endswith(".xls"):
-            return pd.read_excel(path, engine="openpyxl")
-        else:
-            try:
-                return pd.read_csv(path)
-            except UnicodeDecodeError:
-                return pd.read_csv(path, encoding="latin-1")
-    except Exception as e:
-        try:
-            return pd.read_csv(path, encoding="latin-1")
-        except Exception:
-            st.error(f"No se pudo abrir el archivo {path}. Error: {e}")
-            return pd.DataFrame()
+        df = pd.read_excel(path)
+    except Exception:
+        df = pd.read_csv(path, sep=",")
+    return df
 
 def detect_time_columns(df: pd.DataFrame):
     time_like = []
@@ -55,7 +41,7 @@ def detect_time_columns(df: pd.DataFrame):
 def numeric_columns(df: pd.DataFrame):
     return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
-def simple_forecast(series: pd.Series, periods: int = 3, method: str = "linear_trend"):
+def simple_forecast(series: pd.Series, periods: int = 3, method: str = "naive"):
     s = series.dropna().astype(float)
     if len(s) == 0:
         return None
@@ -92,55 +78,44 @@ def build_lp_best_subset(costs, impacts, budget, choose_at_most=None):
     objective = pulp.value(model.objective) if model.objective is not None else None
     return status, chosen, objective
 
-# =========================
-# App no-interactiva
-# =========================
 st.title("Proyecto de Aula - Análisis Prescriptivo (Admisiones y Matrículas)")
 st.caption("Business Analytics • Ingeniería de Sistemas • Contexto educativo (captación, admisión, matrícula, retención)")
 
-# 1) Cargar base
 df = load_data("base.xlsx")
-if df.empty:
-    st.stop()
-
 st.success("Base cargada desde base.xlsx (carpeta raíz), orientada a admisiones/matrículas.")
 st.dataframe(df.head(20), use_container_width=True)
 
 num_cols = numeric_columns(df)
 time_cols = detect_time_columns(df)
 
-# Heurística de KPI: prioriza nombres típicos; si no, primera numérica
-kpi_candidates = [c for c in df.columns if str(c).strip().lower() in [
-    "matriculados", "admitidos", "inscritos", "inscritos_matriculados", "kpi"
-]]
-kpi = None
-for c in kpi_candidates:
-    if c in num_cols:
-        kpi = c; break
-if kpi is None:
-    kpi = num_cols[0] if num_cols else None
+with st.expander("Resumen descriptivo (automático)", expanded=False):
+    if num_cols:
+        st.write(df[num_cols].describe().T)
+        st.bar_chart(df[num_cols].select_dtypes(include=[np.number]).mean(numeric_only=True))
+    else:
+        st.info("No se detectaron columnas numéricas para el resumen.")
 
-# 2) Resumen descriptivo automático
-st.header("Resumen descriptivo (automático)")
-if num_cols:
-    st.write(df[num_cols].describe().T)
-    st.bar_chart(df[num_cols].select_dtypes(include=[np.number]).mean(numeric_only=True))
-else:
-    st.info("No se detectaron columnas numéricas para el resumen.")
-    st.stop()
+st.header("Paso 1: Definición y Contextualización")
+col1, col2, col3 = st.columns(3)
+with col1:
+    empresa = st.text_input("Institución/Unidad", placeholder="Ej: Universidad / Facultad / Programa")
+with col2:
+    proceso = st.text_input("Proceso a optimizar", placeholder="Ej: Captación, Admisión, Matrícula, Retención")
+with col3:
+    problema = st.text_area("Problema u oportunidad", placeholder="Ej: Baja tasa de conversión de inscritos a matriculados")
 
-# 3) Base predictiva automática
-st.header("Base Predictiva (rápida)")
-forecast_h = 3
-method = "linear_trend"
+st.markdown("---")
+st.subheader("Base Predictiva (rápida)")
+
+kpi = st.selectbox("Selecciona el KPI principal (columna numérica)", options=num_cols if num_cols else [])
+forecast_h = st.number_input("Horizonte de proyección (períodos)", min_value=1, max_value=24, value=3, step=1)
+method = st.selectbox("Método de proyección", options=["naive", "moving_avg", "linear_trend"], index=2)
 
 kpi_series = df[kpi] if kpi else None
 baseline_value = float(kpi_series.dropna().iloc[-1]) if kpi_series is not None and len(kpi_series.dropna())>0 else None
 
-st.write(f"KPI principal: **{kpi}**")
-st.write(f"Valor actual (último observado): **{baseline_value if baseline_value is not None else 'N/D'}**")
-
-if kpi and baseline_value is not None:
+if kpi:
+    st.write(f"Valor actual (último observado) de {kpi}: {baseline_value if baseline_value is not None else 'N/D'}")
     forecast_vals = simple_forecast(kpi_series, periods=forecast_h, method=method)
     if forecast_vals is not None:
         st.write("Proyección si no se hace nada (baseline):")
@@ -149,7 +124,6 @@ if kpi and baseline_value is not None:
             f"Proyección {kpi}": forecast_vals
         })
         st.dataframe(proj_df, use_container_width=True)
-
         if time_cols:
             try:
                 tcol = time_cols[0]
@@ -179,106 +153,123 @@ if kpi and baseline_value is not None:
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No se pudo generar proyección con el método seleccionado.")
-else:
-    st.warning("No hay KPI válido o valor base para proyectar.")
-    st.stop()
 
-# 4) Alternativas (predefinidas, sin inputs)
-st.header("Paso 2: Generación de Alternativas de Decisión (automáticas)")
-# Tres alternativas típicas de contextos de admisión/matrícula:
-alternativas = [
-    dict(name="A1 - Pauta segmentada digital",  desc="Campaña digital con lookalike y retargeting", kpi_mode="% relativo", impact=5.0,  cost=8_000_000, extra="-12% tiempo de respuesta"),
-    dict(name="A2 - Beca tempranos 20%",        desc="Descuento a inscritos antes de fecha corte", kpi_mode="% relativo", impact=10.0, cost=15_000_000, extra="+5 p.p. conversión"),
-    dict(name="A3 - Automatizar recordatorios", desc="Secuencias multicanal (email/SMS/WA)",       kpi_mode="Delta absoluto", impact=20.0, cost=5_000_000, extra="-15% abandono")
-]
+st.header("Paso 2: Generación de Alternativas de Decisión")
+st.caption("Define tres (3) alternativas. Ejemplos: aumentar presupuesto en pauta segmentada, simplificar pasos de admisión, beca de inscripción, automatizar recordatorios, etc.")
 
-# 5) Parámetros del modelo (fijos, sin inputs)
-st.subheader("Parámetros del Modelo (fijos)")
-budget = 30_000_000.0          # presupuesto máximo
-choose_at_most = 2             # máximo de alternativas a implementar
-kpi_unit_value = 1.0           # valor monetario por unidad de KPI
+def alt_inputs(idx: int):
+    st.subheader(f"Alternativa {idx+1}")
+    name = st.text_input(f"Nombre A{idx+1}", key=f"name_{idx}", placeholder=f"Ej: A{idx+1} - Beca del 20% para inscritos tempranos")
+    desc = st.text_area(f"Acción Propuesta A{idx+1}", key=f"desc_{idx}", placeholder="Describe la acción concreta (proceso, responsables, alcance)")
+    kpi_mode = st.selectbox(f"Tipo de impacto en {kpi}", ["% relativo", "Delta absoluto"], key=f"kpi_mode_{idx}")
+    impact = st.number_input(f"Impacto esperado ({kpi_mode}) A{idx+1}", key=f"impact_{idx}", value=0.0, step=0.1)
+    cost = st.number_input(f"Costo estimado A{idx+1}", key=f"cost_{idx}", min_value=0.0, value=0.0, step=100.0)
+    extra = st.text_input(f"Métrica adicional (texto libre) A{idx+1}", key=f"extra_{idx}", placeholder="Ej: -15% tiempo de trámite")
+    return dict(name=name, desc=desc, kpi_mode=kpi_mode, impact=impact, cost=cost, extra=extra)
 
-st.write(f"- Presupuesto máximo: **${budget:,.0f}**")
-st.write(f"- Seleccionar hasta: **{choose_at_most}** alternativas")
-st.write(f"- Valor por unidad de {kpi}: **{kpi_unit_value:,.0f}**")
+alts = []
+for i in range(3):
+    with st.container(border=True):
+        alts.append(alt_inputs(i))
 
-# 6) Simulación de resultados
-st.subheader("Simulación de resultados por alternativa (automática)")
+st.markdown("---")
+st.subheader("Parámetros del Modelo")
+colb1, colb2, colb3 = st.columns(3)
+with colb1:
+    budget = st.number_input("Presupuesto máximo disponible", min_value=0.0, value=0.0, step=100.0)
+with colb2:
+    choose_at_most = st.number_input("Seleccionar hasta (n) alternativas", min_value=1, max_value=3, value=1, step=1)
+with colb3:
+    kpi_unit_value = st.number_input(f"Valor monetario por unidad de {kpi} (para beneficio neto)", min_value=0.0, value=1.0, step=1.0)
+
+st.subheader("Simulación de resultados por alternativa")
 sim_rows = []
-for i, a in enumerate(alternativas):
-    if a["kpi_mode"] == "% relativo":
-        new_kpi = baseline_value * (1.0 + a["impact"]/100.0)
-    else:
-        new_kpi = baseline_value + a["impact"]
-    benefit = (new_kpi - baseline_value) * kpi_unit_value
-    net_benefit = benefit - a["cost"]
-    sim_rows.append({
-        "Alternativa": a["name"],
-        "Impacto_KPI_proyectado": new_kpi,
-        "Beneficio_monetizado": benefit,
-        "Costo": a["cost"],
-        "Beneficio_neto": net_benefit,
-        "Descripción": a["desc"],
-        "Extras": a["extra"]
-    })
-sim_df = pd.DataFrame(sim_rows)
-st.dataframe(sim_df, use_container_width=True)
-fig2 = px.bar(sim_df, x="Alternativa", y="Beneficio_neto", title="Comparación de beneficio neto por alternativa")
-st.plotly_chart(fig2, use_container_width=True)
+if kpi and baseline_value is not None:
+    for i, a in enumerate(alts):
+        if a["kpi_mode"] == "% relativo":
+            new_kpi = baseline_value * (1.0 + a["impact"]/100.0)
+        else:
+            new_kpi = baseline_value + a["impact"]
+        benefit = (new_kpi - baseline_value) * kpi_unit_value
+        net_benefit = benefit - a["cost"]
+        sim_rows.append({
+            "Alternativa": a["name"] or f"A{i+1}",
+            "Impacto_KPI_proyectado": new_kpi,
+            "Beneficio_monetizado": benefit,
+            "Costo": a["cost"],
+            "Beneficio_neto": net_benefit,
+            "Descripción": a["desc"],
+            "Extras": a["extra"]
+        })
+    sim_df = pd.DataFrame(sim_rows)
+    st.dataframe(sim_df, use_container_width=True)
+    fig2 = px.bar(sim_df, x="Alternativa", y="Beneficio_neto", title="Comparación de beneficio neto por alternativa")
+    st.plotly_chart(fig2, use_container_width=True)
 
-# 7) Optimización (automática, sin botón)
-st.header("Paso 3: Desarrollo del Modelo Prescriptivo (Optimización automática)")
-costs = [r["Costo"] for r in sim_rows]
-impacts = [r["Beneficio_monetizado"] for r in sim_rows]
-names = [r["Alternativa"] for r in sim_rows]
+st.header("Paso 3: Desarrollo del Modelo Prescriptivo (Optimización)")
+if kpi and baseline_value is not None and len(alts) == 3:
+    costs = []; impacts = []; names = []
+    for i, a in enumerate(alts):
+        names.append(a["name"] or f"A{i+1}")
+        if a["kpi_mode"] == "% relativo":
+            new_kpi = baseline_value * (1.0 + a["impact"]/100.0)
+        else:
+            new_kpi = baseline_value + a["impact"]
+        benefit = (new_kpi - baseline_value) * kpi_unit_value
+        impacts.append(benefit); costs.append(a["cost"])
 
-if PULP_OK:
-    status, chosen, objective = build_lp_best_subset(costs, impacts, budget, choose_at_most=choose_at_most)
-    st.success(f"Estado del optimizador (PuLP): {status}")
-    if chosen:
-        chosen_names = [names[i] for i in chosen]
-        st.info(f"Selección óptima: {', '.join(chosen_names)}")
-        st.write(f"Impacto total maximizado: {objective:,.2f}")
-    else:
-        st.warning("El modelo no seleccionó ninguna alternativa dadas las restricciones.")
-else:
-    # Heurística: ordenar por beneficio neto, meter hasta presupuesto y cardinalidad
-    candidates = sorted([(i, impacts[i]-costs[i]) for i in range(3)], key=lambda t: t[1], reverse=True)
-    chosen = []; remaining_budget = budget
-    for i, nb in candidates:
-        if len(chosen) >= choose_at_most:
-            break
-        if costs[i] <= remaining_budget and nb > 0:
-            chosen.append(i); remaining_budget -= costs[i]
-    if chosen:
-        chosen_names = [names[i] for i in chosen]
-        objective = sum(impacts[i] for i in chosen)
-        st.success("Resultado por heurística (sin PuLP):")
-        st.info(f"Selección: {', '.join(chosen_names)}")
-        st.write(f"Impacto total aproximado: {objective:,.2f}")
-    else:
-        st.warning("La heurística no encontró alternativas viables con el presupuesto dado.")
+    if st.button("Resolver modelo y elegir la mejor alternativa"):
+        if PULP_OK:
+            status, chosen, objective = build_lp_best_subset(costs, impacts, budget, choose_at_most=choose_at_most)
+            if status is None:
+                st.warning("No se pudo ejecutar PuLP. Se usará el método alternativo.")
+            else:
+                st.success(f"Estado del optimizador: {status}")
+                if chosen:
+                    chosen_names = [names[i] for i in chosen]
+                    st.info(f"Selección óptima: {', '.join(chosen_names)}")
+                    st.write(f"Impacto total maximizado: {objective:,.2f}")
+                else:
+                    st.warning("El modelo no seleccionó ninguna alternativa dadas las restricciones.")
+        else:
+            candidates = sorted([(i, impacts[i]-costs[i]) for i in range(3)], key=lambda t: t[1], reverse=True)
+            chosen = []; remaining_budget = budget
+            for i, nb in candidates:
+                if len(chosen) >= choose_at_most:
+                    break
+                if costs[i] <= remaining_budget and nb > 0:
+                    chosen.append(i); remaining_budget -= costs[i]
+            if chosen:
+                chosen_names = [names[i] for i in chosen]
+                objective = sum(impacts[i] for i in chosen)
+                st.success("Resultado por heurística (sin PuLP):")
+                st.info(f"Selección: {', '.join(chosen_names)}")
+                st.write(f"Impacto total aproximado: {objective:,.2f}")
+            else:
+                st.warning("La heurística no encontró alternativas viables con el presupuesto dado.")
 
-# 8) Prescripción final (automática)
 st.header("Paso 4: Prescripción Final y Plan de Acción")
-recurso_tiempo = "4 semanas"
-recurso_personas = "Admisiones, Mercadeo, Registro"
-recurso_tec = "CRM, embudos automatizados, tableros KPI"
+st.caption("Borrador de informe con diagnóstico, recomendación y plan de implementación.")
 
-best_row = sim_df.sort_values("Beneficio_neto", ascending=False).iloc[0]
-promedio_forecast = None
-try:
-    promedio_forecast = float(np.mean(sim_df["Impacto_KPI_proyectado"].values))
-except Exception:
-    pass
-proyectado_txt = f"{promedio_forecast:.2f}" if promedio_forecast is not None else "N/D"
+recurso_tiempo = st.text_input("Tiempo estimado de ejecución", placeholder="Ej: 4 semanas")
+recurso_personas = st.text_input("Equipo y roles requeridos", placeholder="Ej: Admisiones, Mercadeo, Registro")
+recurso_tec = st.text_input("Tecnología/herramientas", placeholder="Ej: CRM, embudos automatizados, tableros KPI")
 
-prescripcion = f"""
+prescripcion = ""
+if 'sim_df' in locals() and kpi and baseline_value is not None and len(sim_df) > 0:
+    best_row = sim_df.sort_values("Beneficio_neto", ascending=False).iloc[0]
+    promedio_forecast = None
+    try:
+        promedio_forecast = float(np.mean(proj_df.iloc[:,1].values))
+    except Exception:
+        pass
+    proyectado_txt = f"{promedio_forecast:.2f}" if promedio_forecast is not None else "N/D"
+    prescripcion = f"""
 **Diagnóstico conciso**
-- Institución/Proceso: N/D - N/D
-- Problema/Oportunidad: N/D
+- Institución/Proceso: {empresa or 'N/D'} - {proceso or 'N/D'}
+- Problema/Oportunidad: {problema or 'N/D'}
 - KPI principal: {kpi}; valor actual: {baseline_value:.2f}
-- Proyección (baseline) sin intervención (h=3, método={method}): promedio estimado {proyectado_txt}.
+- Proyección (baseline) sin intervención (h={forecast_h}, método={method}): promedio estimado {proyectado_txt}.
 
 **Recomendación prescriptiva**
 - Alternativa recomendada: {best_row['Alternativa']}
@@ -287,9 +278,9 @@ prescripcion = f"""
 - Efecto proyectado en KPI: {best_row['Impacto_KPI_proyectado']:.2f}
 
 **Recursos necesarios**
-- Tiempo: {recurso_tiempo}
-- Equipo: {recurso_personas}
-- Tecnología: {recurso_tec}
+- Tiempo: {recurso_tiempo or 'Por definir'}
+- Equipo: {recurso_personas or 'Por definir'}
+- Tecnología: {recurso_tec or 'Por definir'}
 - Presupuesto asociado: {best_row['Costo']:.2f}
 
 **Plan de implementación (primeros 3 pasos)**
@@ -297,8 +288,8 @@ prescripcion = f"""
 2) Preparación operativa y despliegue controlado (piloto) de la alternativa seleccionada.
 3) Monitoreo de KPI y métricas complementarias; ajustes iterativos y escalamiento.
 """
-st.markdown(prescripcion)
+    st.markdown(prescripcion)
 
-st.caption("Proyecto de Aula - Admisiones y Matrículas • Business Analytics • Ingeniería de Sistemas • 2025")
-
-st.caption("Fabián Valero y Esteban Fonseca")
+st.info("Copia y pega este informe en tu entrega. También puedes exportarlo desde el menú de los 3 puntos de Streamlit.")
+st.markdown("---")
+st.caption("Proyecto de Aula - Admisiones y Matrículas • Streamlit")
