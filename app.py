@@ -379,6 +379,7 @@ if 'sim_df' in locals() and kpi and baseline_value is not None and len(sim_df) >
 """
     st.markdown(prescripcion)
 
-st.info("Copia y pega este informe en tu entrega. También puedes exportarlo desde el menú de los 3 puntos de Streamlit.")
-st.markdown("---")
-st.caption("Proyecto de Aula - Admisiones y Matrículas • Streamlit (entradas restringidas a desplegables)")
+
+st.caption("Proyecto de Aula - Admisiones y Matrículas • Bussiness Analytics • Ingeniería de Sistemas • Universidad de Cundinamarca • 2025")
+
+st.caption("Fabian Valero - Esteban Fonseca")
